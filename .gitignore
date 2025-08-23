@@ -1,0 +1,7 @@
+/rebuild_env.sh
+/.env
+/.idea
+/.ipynb_checkpoints
+/chromadb
+**/__pycache__/
+Pipfile.lock
