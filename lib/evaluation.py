@@ -44,6 +44,12 @@ class EvaluationResult(BaseModel):
     overall_score: float = Field(description="Overall evaluation score (0-1)", ge=0, le=1)
     feedback: str = Field(description="Detailed feedback and recommendations")
 
+
+class EvaluationReport(BaseModel):
+    """Evaluation result for retrieval step"""
+    useful: bool = Field(description="whether the documents are useful to answer the question")
+    description: str = Field(description="description about the evaluation result")
+
 class TestCase(BaseModel):
     """A test case for agent evaluation"""
     id: str
