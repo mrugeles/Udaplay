@@ -1,9 +1,17 @@
-from typing import TypedDict, List, Optional, Union, TypeVar
+from typing import TypedDict, List, Optional, Union, Type, Any
 import json
+
+from pydantic import BaseModel, Field
 
 from lib.state_machine import StateMachine, Step, EntryPoint, Termination, Run
 from lib.llm import LLM
-from lib.messages import AIMessage, UserMessage, SystemMessage, ToolMessage
+from lib.messages import (
+    AIMessage,
+    UserMessage,
+    SystemMessage,
+    ToolMessage,
+    AnyMessage,
+)
 from lib.tooling import Tool, ToolCall
 from lib.memory import ShortTermMemory
 
@@ -11,16 +19,33 @@ from lib.memory import ShortTermMemory
 class AgentState(TypedDict):
     user_query: str  # The current user query being processed
     instructions: str  # System instructions for the agent
-    messages: List[dict]  # List of conversation messages
+    messages: List[AnyMessage]  # List of conversation messages
     current_tool_calls: Optional[List[ToolCall]]  # Current pending tool calls
     total_tokens: int  # Track the cumulative total
+    session_id: str  # Track conversation sessions
+    structured_answer: Optional[dict]  # Parsed structured response
+
+
+class Citation(BaseModel):
+    """Reference to a source used in the answer."""
+
+    source: str = Field(description="Source identifier or URL")
+    text: str = Field(description="Excerpt or supporting text")
+
+
+class CitedAnswer(BaseModel):
+    """Structured answer containing citations."""
+
+    answer: str = Field(description="Main answer text")
+    citations: List[Citation] = Field(default_factory=list)
     
 class Agent:
-    def __init__(self, 
+    def __init__(self,
                  model_name: str,
-                 instructions: str, 
+                 instructions: str,
                  tools: List[Tool] = None,
-                 temperature: float = 0.7):
+                 temperature: float = 0.7,
+                 response_model: Type[BaseModel] = CitedAnswer):
         """
         Initialize an Agent
         
@@ -34,6 +59,7 @@ class Agent:
         self.tools = tools if tools else []
         self.model_name = model_name
         self.temperature = temperature
+        self.response_model = response_model
         
         # Initialize memory and state machine
         self.memory = ShortTermMemory()
@@ -57,23 +83,42 @@ class Agent:
 
     def _llm_step(self, state: AgentState) -> AgentState:
         """Step logic: Process the current state through the LLM"""
-        # Initialize LLM
         llm = LLM(
             model=self.model_name,
             temperature=self.temperature,
-            tools=self.tools
+            tools=self.tools,
         )
 
-        response = llm.invoke(state["messages"])
+        response = llm.invoke(
+            state["messages"],
+            response_format=self.response_model,
+        )
         tool_calls = response.tool_calls if response.tool_calls else None
 
         current_total = state.get("total_tokens", 0)
         if response.token_usage:
             current_total += response.token_usage.total_tokens
 
-        # Create AI message with content and tool calls
+        structured = None
+        try:
+            from lib.parsers import PydanticOutputParser
+
+            parser = PydanticOutputParser(model_class=self.response_model)
+            structured = parser.parse(response)
+        except Exception:
+            pass
+
+        content = response.content
+        if structured:
+            content = structured.answer
+            if structured.citations:
+                citation_lines = [
+                    f"[{i+1}] {c.text} ({c.source})" for i, c in enumerate(structured.citations)
+                ]
+                content += "\n\nSources:\n" + "\n".join(citation_lines)
+
         ai_message = AIMessage(
-            content=response.content, 
+            content=content,
             tool_calls=tool_calls,
         )
 
@@ -82,6 +127,7 @@ class Agent:
             "current_tool_calls": tool_calls,
             "session_id": state["session_id"],
             "total_tokens": current_total,
+            "structured_answer": structured.model_dump() if structured else None,
         }
 
     def _tool_step(self, state: AgentState) -> AgentState:
@@ -171,6 +217,8 @@ class Agent:
             "messages": previous_messages,
             "current_tool_calls": None,
             "session_id": session_id,
+            "total_tokens": 0,
+            "structured_answer": None,
         }
 
         run_object = self.workflow.run(initial_state)
