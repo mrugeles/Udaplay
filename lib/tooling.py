@@ -98,7 +98,8 @@ class Tool:
                         param["name"] for param in self.parameters if param["required"]
                     ],
                     "additionalProperties": False
-                }
+                },
+                "strict": True,
             }
         }
 
