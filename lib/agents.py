@@ -108,7 +108,7 @@ class Agent:
         # Clear tool calls and add results to messages
         return {
             "messages": state["messages"] + tool_messages,
-            "current_tool_calls": None,
+            "current_tool_calls": tool_messages,
             "session_id": state["session_id"]
         }
 
